@@ -5,14 +5,34 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/time/rate"
 	"greenlight.janak.net/internal/data"
+	"greenlight.janak.net/internal/logger"
 	"greenlight.janak.net/internal/validator"
 )
+
+func (app *application) logRequest(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		rw := logger.NewResponseWriter(w)
+
+		next.ServeHTTP(rw, r)
+
+		app.logger.PrintInfo("request completed", map[string]string{
+			"method":      r.Method,
+			"url":         r.URL.RequestURI(),
+			"remote_addr": r.RemoteAddr,
+			"status":      strconv.Itoa(rw.StatusCode()),
+			"duration":    time.Since(start).String(),
+		})
+	})
+}
 
 func (app *application) recoverPanic(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -179,19 +199,28 @@ func (app *application) enableCORS(next http.Handler) http.Handler{
 
 		w.Header().Add("Vary","Origin")
 
-		origin := w.Header().Get("Origin")
+		w.Header().Add("Vary","Access-controlRequest-Method")
+
+		origin := r.Header.Get("Origin")
 
 		if origin != ""{
 			for i := range app.config.cors.trustedOrigins{
 				if origin == app.config.cors.trustedOrigins[i]{
 					w.Header().Set("Access-Control-Allow-Origin",origin)
+
+					if r.Method == http.MethodOptions && r.Header.Get("Access-control-Request-Method") != ""{
+						w.Header().Set("Access-Control-Allow-Methods","Options,PUT,PATCH,DELETE")
+						w.Header().Set("Access-Control-Allow-Headers","Authorization,Content-Type")
+
+						w.WriteHeader(http.StatusOK)
+						return
+					}
 					break
 				}
 			}
 		}
+
 		
 		next.ServeHTTP(w,r)
 	})
-
-	
 }
